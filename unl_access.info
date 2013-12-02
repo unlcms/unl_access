@@ -1,0 +1,6 @@
+name = UNL Access
+description = Allows users to restrict their content to people with given UNL affiliations.
+core = 7.x
+dependencies[] = unl_cas
+
+files[] = unl_access.module

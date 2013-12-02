@@ -1,0 +1,159 @@
+<?php
+
+// Create numeric ids for each affiliation to use as gids in node_access table
+define('UNL_AFFILIATION_STUDENT', 1);
+define('UNL_AFFILIATION_STAFF',   2);
+define('UNL_AFFILIATION_FACULTY', 3);
+
+/**
+ * Return an array of numeric ids to textual names of affiliations.
+ * @return array
+ */
+function _unl_access_affiliation_map() {
+  return array(
+    UNL_AFFILIATION_STUDENT => 'student',
+    UNL_AFFILIATION_STAFF   => 'staff',
+    UNL_AFFILIATION_FACULTY => 'faculty',
+  );
+}
+
+/**
+ * Implements hook_access_node_grants.
+ * Create a grant for each affiliation the user has.
+ */
+function unl_access_node_grants($account, $op) {
+  $grants = array();
+
+  $grants['unl access owner'][] = $account->uid;
+
+  if (!isset($account->data['unl']['affiliations']) || !$account->data['unl']['affiliations']) {
+    return $grants;
+  }
+
+  foreach ($account->data['unl']['affiliations'] as $affiliation) {
+    $grants['unl access affiliations'][] = array_search($affiliation, _unl_access_affiliation_map());
+  }
+
+  return $grants;
+}
+
+/**
+ * Implements hook_node_access_records.
+ * If a node has access limited to some affiliations, put those grants into node_access table
+ * along with a grant for the node owner.
+ */
+function unl_access_node_access_records($node) {
+  $grants = array();
+
+  foreach ($node->unl_access['affiliations'] as $affiliation) {
+    if (!$affiliation) {
+      continue;
+    }
+    $grants[] = array(
+      'realm' => 'unl access affiliation',
+      'gid'   => array_search($affiliation, _unl_access_affiliation_map()),
+      'grant_view'   => 1,
+      'grant_update' => 0,
+      'grant_delete' => 0,
+      'priority'     => 0,
+    );
+  }
+
+  // If we're restricting access to this node, give the owner full access.
+  if ($grants) {
+    $grants[] = array(
+      'realm' => 'unl access owner',
+      'gid'   => $node->uid,
+      'grant_view'   => 1,
+      'grant_update' => 1,
+      'grant_delete' => 1,
+      'priority'     => 0,
+    );
+  }
+
+  return $grants;
+}
+
+/**
+ * Implements hook_form_alter.
+ * Add a section to the node edit form to allow users to limit viewing of the node to certain UNL affiliations.
+ */
+function unl_access_form_alter(&$form, &$form_state, $form_id) {
+  $unlAffiliations = array();
+  foreach (_unl_access_affiliation_map() as $affiliation) {
+    $unlAffiliations[$affiliation] = ucfirst($affiliation);
+  }
+
+  if (isset($form['type']['#value']) && $form['type']['#value'] . '_node_form' == $form_id) {
+    $form['unl_access'] = array(
+      '#type' => 'fieldset',
+      '#title' => 'UNL Access',
+      '#group' => 'additional_settings',
+    );
+    $form['unl_access']['affiliations'] = array(
+      '#type' => 'checkboxes',
+      '#multiple' => TRUE,
+      '#title' => 'Affiliations',
+      '#description' => 'Restrict viewing of this node to these UNL affiliations (select none for public access).',
+      '#options' => $unlAffiliations,
+      '#default_value' => isset($form_state['node']->unl_access) ? $form_state['node']->unl_access['affiliations'] : array(),
+      '#attached' => array(
+        'js' => array(drupal_get_path('module', 'unl_access') . '/node.js')
+      ),
+      '#parents' => array('unl_access', 'affiliations'),
+    );
+  }
+}
+
+/**
+ * Implements hook_node_insert.
+ * After saving a node, also save which affiliations are allowed to view it.
+ */
+function unl_access_node_insert($node) {
+  $affiliationMap = _unl_access_affiliation_map();
+  foreach ($node->unl_access['affiliations'] as $affiliation) {
+    if (!$affiliation) {
+      continue;
+    }
+    db_insert('unl_access_node_affiliation')
+      ->fields(array('nid', 'affiliation'))
+      ->values(array($node->nid, $affiliation))
+      ->execute();
+  }
+}
+
+/**
+ * Implements hook_node_delete.
+ * When removing a node, remove all affiliation access data.
+ */
+function unl_access_node_delete($node) {
+  db_delete('unl_access_node_affiliation')
+    ->condition('nid', $node->nid)
+    ->execute();
+}
+
+/**
+ * Implements hook_node_update.
+ * When updating a node, also update affiliation access data.
+ */
+function unl_access_node_update($node) {
+  unl_access_node_delete($node);
+  unl_access_node_insert($node);
+}
+
+/**
+ * Implements hook_node_load.
+ * When loading a node, append any affiliation access data.
+ */
+function unl_access_node_load($nodes, $types) {
+  $nodeIds = array_keys($nodes);
+  $data = db_select('unl_access_node_affiliation', 'a')
+    ->fields('a', array('nid', 'affiliation'))
+    ->condition('nid', $nodeIds)
+    ->execute()
+    ->fetchAll();
+
+  foreach ($data as $row) {
+    $nodes[$row->nid]->unl_access['affiliations'][$row->affiliation] = $row->affiliation;
+  }
+}

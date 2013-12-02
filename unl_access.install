@@ -1,0 +1,32 @@
+<?php
+
+/**
+ * Implements hook_schema().
+ */
+function unl_access_schema() {
+  $schema = array();
+  $schema['unl_access_node_affiliation'] = array(
+    'description' => 'UNL Affiliations allowed to access given nodes.',
+    'fields' => array(
+      'nid' => array(
+        'type'     => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+      ),
+      'affiliation' => array(
+        'type'     => 'varchar',
+        'not null' => TRUE,
+        'length'   => 255,
+      ),
+    ),
+    'primary key' => array('nid', 'affiliation'),
+    'foreign keys' => array(
+      'node' => array(
+        'table'   => 'node',
+        'columns' => array('nid' => 'nid'),
+      ),
+    )
+  );
+
+  return $schema;
+}
