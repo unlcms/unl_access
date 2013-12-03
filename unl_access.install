@@ -14,9 +14,10 @@ function unl_access_schema() {
         'not null' => TRUE,
       ),
       'affiliation' => array(
-        'type'     => 'varchar',
+        'type'     => 'int',
+        'unsigned' => TRUE,
         'not null' => TRUE,
-        'length'   => 255,
+        'size'     => 'tiny',
       ),
     ),
     'primary key' => array('nid', 'affiliation'),

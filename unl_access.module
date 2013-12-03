@@ -1,20 +1,36 @@
 <?php
 
 // Create numeric ids for each affiliation to use as gids in node_access table
-define('UNL_AFFILIATION_STUDENT', 1);
-define('UNL_AFFILIATION_STAFF',   2);
-define('UNL_AFFILIATION_FACULTY', 3);
+define('UNL_AFFILIATION_ANY',     1);
+define('UNL_AFFILIATION_GUEST',   2);
+define('UNL_AFFILIATION_STUDENT', 3);
+define('UNL_AFFILIATION_STAFF',   4);
+define('UNL_AFFILIATION_FACULTY', 5);
 
 /**
  * Return an array of numeric ids to textual names of affiliations.
  * @return array
  */
-function _unl_access_affiliation_map() {
-  return array(
-    UNL_AFFILIATION_STUDENT => 'student',
-    UNL_AFFILIATION_STAFF   => 'staff',
-    UNL_AFFILIATION_FACULTY => 'faculty',
+function _unl_access_get_grant_id_from_affiliation($affiliation) {
+  $map = array(
+    'affiliate'         => UNL_AFFILIATION_STAFF,
+    'continue services' => UNL_AFFILIATION_FACULTY,
+    'emeriti'           => UNL_AFFILIATION_FACULTY,
+    'faculty'           => UNL_AFFILIATION_FACULTY,
+    'override'          => UNL_AFFILIATION_GUEST,
+    'retiree'           => UNL_AFFILIATION_STAFF,
+    'rif'               => UNL_AFFILIATION_STAFF,
+    'sponsored'         => UNL_AFFILIATION_GUEST,
+    'staff'             => UNL_AFFILIATION_STAFF,
+    'student'           => UNL_AFFILIATION_STUDENT,
+    'volunteer'         => UNL_AFFILIATION_STAFF,
   );
+
+  if (isset($map[$affiliation])) {
+    return $map[$affiliation];
+  }
+
+  return UNL_AFFILIATION_ANY;
 }
 
 /**
@@ -30,8 +46,9 @@ function unl_access_node_grants($account, $op) {
     return $grants;
   }
 
+  $grants['unl access affiliation'][] = UNL_AFFILIATION_ANY;
   foreach ($account->data['unl']['affiliations'] as $affiliation) {
-    $grants['unl access affiliation'][] = array_search($affiliation, _unl_access_affiliation_map());
+    $grants['unl access affiliation'][] = _unl_access_get_grant_id_from_affiliation($affiliation);
   }
 
   return $grants;
@@ -51,7 +68,7 @@ function unl_access_node_access_records($node) {
     }
     $grants[] = array(
       'realm' => 'unl access affiliation',
-      'gid'   => array_search($affiliation, _unl_access_affiliation_map()),
+      'gid'   => $affiliation,
       'grant_view'   => 1,
       'grant_update' => 0,
       'grant_delete' => 0,
@@ -79,11 +96,6 @@ function unl_access_node_access_records($node) {
  * Add a section to the node edit form to allow users to limit viewing of the node to certain UNL affiliations.
  */
 function unl_access_form_alter(&$form, &$form_state, $form_id) {
-  $unlAffiliations = array();
-  foreach (_unl_access_affiliation_map() as $affiliation) {
-    $unlAffiliations[$affiliation] = ucfirst($affiliation);
-  }
-
   if (isset($form['type']['#value']) && $form['type']['#value'] . '_node_form' == $form_id) {
     $form['unl_access'] = array(
       '#type' => 'fieldset',
@@ -95,7 +107,13 @@ function unl_access_form_alter(&$form, &$form_state, $form_id) {
       '#multiple' => TRUE,
       '#title' => 'Affiliations',
       '#description' => 'Restrict viewing of this node to these UNL affiliations (select none for public access).',
-      '#options' => $unlAffiliations,
+      '#options' => array(
+        UNL_AFFILIATION_ANY     => 'Any Affiliation',
+        UNL_AFFILIATION_GUEST   => 'Guest',
+        UNL_AFFILIATION_STUDENT => 'Student',
+        UNL_AFFILIATION_STAFF   => 'Staff',
+        UNL_AFFILIATION_FACULTY => 'Faculty or Emeriti',
+      ),
       '#default_value' => isset($form_state['node']->unl_access) ? $form_state['node']->unl_access['affiliations'] : array(),
       '#attached' => array(
         'js' => array(drupal_get_path('module', 'unl_access') . '/node.js')
@@ -110,7 +128,6 @@ function unl_access_form_alter(&$form, &$form_state, $form_id) {
  * After saving a node, also save which affiliations are allowed to view it.
  */
 function unl_access_node_insert($node) {
-  $affiliationMap = _unl_access_affiliation_map();
   foreach ($node->unl_access['affiliations'] as $affiliation) {
     if (!$affiliation) {
       continue;
