@@ -174,3 +174,65 @@ function unl_access_node_load($nodes, $types) {
     $nodes[$row->nid]->unl_access['affiliations'][$row->affiliation] = $row->affiliation;
   }
 }
+
+/**
+ * Implements hook_page_alter.
+ * Intercepts 404 pages and makes the message for friendly if the user isn't currently
+ * a member of one of the required affiliations.
+ */
+function unl_access_page_alter(&$page) {
+  // We only care about 403 pages.
+  if (drupal_get_http_header('Status') != '403 Forbidden') {
+    return;
+  }
+
+  // We only care about individual node pages.
+  if (substr(current_path(), 0, 5) != 'node/') {
+    return;
+  }
+
+  // We only care if we're the one limiting access to this page.
+  $nid = substr(current_path(), 5);
+  $data = db_select('unl_access_node_affiliation', 'a')
+    ->fields('a', array('affiliation'))
+    ->condition('nid', $nid)
+    ->execute()
+    ->fetchAll();
+
+  if (!$data) {
+    return;
+  }
+
+  // Generate the friendly error message and display it.
+  $affiliations = array();
+  foreach ($data as $row) {
+    switch ($row->affiliation) {
+      case UNL_AFFILIATION_ANY:
+        $page['content']['system_main']['main']['#markup'] = 'You must be logged in to a UNL account to view this page.';
+        return;
+      case UNL_AFFILIATION_GUEST:
+        $affiliations[] = 'Guest' . (user_is_anonymous() ? '' : 's');
+        break;
+      case UNL_AFFILIATION_STUDENT:
+        $affiliations[] = 'Student' . (user_is_anonymous() ? '' : 's');
+        break;
+      case UNL_AFFILIATION_STAFF:
+        $affiliations[] = 'Staff';
+        break;
+      case UNL_AFFILIATION_FACULTY:
+        $affiliations[] = 'Faculty';
+        $affiliations[] = 'Emeriti';
+        break;
+    }
+  }
+
+  if (count($affiliations) > 1) {
+    $affiliations[count($affiliations)-1] = (user_is_anonymous() ? 'or ' : 'and ') . $affiliations[count($affiliations)-1];
+  }
+  $affiliations = implode(', ', $affiliations);
+  if (user_is_anonymous()) {
+    $page['content']['system_main']['main']['#markup'] = 'You must be logged in as a UNL ' . $affiliations . ' to view this page.';
+  } else {
+    $page['content']['system_main']['main']['#markup'] = 'Only UNL ' . $affiliations . ' are allowed to view this page.';
+  }
+}
