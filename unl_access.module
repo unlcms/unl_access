@@ -31,7 +31,7 @@ function unl_access_node_grants($account, $op) {
   }
 
   foreach ($account->data['unl']['affiliations'] as $affiliation) {
-    $grants['unl access affiliations'][] = array_search($affiliation, _unl_access_affiliation_map());
+    $grants['unl access affiliation'][] = array_search($affiliation, _unl_access_affiliation_map());
   }
 
   return $grants;
