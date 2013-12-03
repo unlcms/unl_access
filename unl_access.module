@@ -33,6 +33,18 @@ function _unl_access_get_grant_id_from_affiliation($affiliation) {
   return UNL_AFFILIATION_ANY;
 }
 
+function _unl_access_get_affiliations() {
+  $map = array(
+    UNL_AFFILIATION_ANY     => 'Any Affiliation',
+    UNL_AFFILIATION_GUEST   => 'Guest',
+    UNL_AFFILIATION_STUDENT => 'Student',
+    UNL_AFFILIATION_STAFF   => 'Staff',
+    UNL_AFFILIATION_FACULTY => 'Faculty and Emeriti',
+  );
+
+  return $map;
+}
+
 /**
  * Implements hook_access_node_grants.
  * Create a grant for each affiliation the user has.
@@ -107,13 +119,7 @@ function unl_access_form_alter(&$form, &$form_state, $form_id) {
       '#multiple' => TRUE,
       '#title' => 'Affiliations',
       '#description' => 'Restrict viewing of this node to these UNL affiliations (select none for public access).',
-      '#options' => array(
-        UNL_AFFILIATION_ANY     => 'Any Affiliation',
-        UNL_AFFILIATION_GUEST   => 'Guest',
-        UNL_AFFILIATION_STUDENT => 'Student',
-        UNL_AFFILIATION_STAFF   => 'Staff',
-        UNL_AFFILIATION_FACULTY => 'Faculty or Emeriti',
-      ),
+      '#options' => _unl_access_get_affiliations(),
       '#default_value' => isset($form_state['node']->unl_access) ? $form_state['node']->unl_access['affiliations'] : array(),
       '#attached' => array(
         'js' => array(drupal_get_path('module', 'unl_access') . '/node.js')
@@ -234,5 +240,95 @@ function unl_access_page_alter(&$page) {
     $page['content']['system_main']['main']['#markup'] = 'You must be logged in as a UNL ' . $affiliations . ' to view this page.';
   } else {
     $page['content']['system_main']['main']['#markup'] = 'Only UNL ' . $affiliations . ' are allowed to view this page.';
+  }
+}
+
+/**
+ * Implements hook_node_operations.
+ * Adds a number of operations to mass add/remove affiliation access controls.
+ */
+function unl_access_node_operations() {
+  $ops = array();
+  $ops['unl access'] = array(
+    'label' => 'Manage UNL Affiliation Access',
+  );
+  $ops['unl access make public'] = array(
+    'label' => 'Make public',
+    'callback' => 'unl_access_operation',
+    'callback arguments' => array('mode' => 'revoke', 'affiliation' => 'all')
+  );
+  foreach (array('grant' => 'Add', 'revoke' => 'Remove') as $mode => $modeLabel) {
+    foreach (_unl_access_get_affiliations() as $affiliation => $affiliationLabel) {
+      $ops["unl access $mode-$affiliation"] = array(
+        'label' => "$modeLabel \"$affiliationLabel\"",
+        'callback' => 'unl_access_operation',
+        'callback arguments' => array('mode' => $mode, 'affiliation' => $affiliation)
+      );
+    }
+  }
+  return $ops;
+}
+
+/**
+ * Implements hook_form_FORM_ID_alter
+ * Shamelessly ripped off from workbench_access to prettify up the node operation menu.
+ */
+function unl_access_form_node_admin_content_alter(&$form, &$form_state) {
+  if (empty($form['admin']['options']['operation']['#options'])) {
+    return;
+  }
+
+  $options = &$form['admin']['options']['operation']['#options'];
+  foreach ($form['admin']['options']['operation']['#options'] as $key => $value) {
+    if ($key == 'unl access') {
+      unset($options[$key]);
+      $item = t('Manage UNL Affiliation Access');
+      $options[$item] = array();
+    }
+    if (substr($key, 0, 11) == 'unl access ') {
+      unset($options[$key]);
+      $options[$item][$key] = $value;
+    }
+  }
+}
+
+/**
+ * Callback specified in unl_access_node_operations
+ * Handles granting/revoking affiliations for the given list of nodes.
+ */
+function unl_access_operation($nids, $mode, $affiliation) {
+  if ($mode == 'grant') {
+    $existing = db_select('unl_access_node_affiliation', 'a')
+      ->fields('a', array('nid'))
+      ->condition('nid', $nids)
+      ->condition('affiliation', $affiliation)
+      ->execute()
+      ->fetchCol();
+    $nids = array_diff($nids, $existing);
+
+    if (!$nids) {
+      return;
+    }
+
+    $query = db_insert('unl_access_node_affiliation')
+      ->fields(array('nid', 'affiliation'));
+    foreach ($nids as $nid) {
+      $query->values(array($nid, $affiliation));
+    }
+
+    $query->execute();
+    node_access_needs_rebuild(TRUE);
+  }
+
+  if ($mode == 'revoke') {
+    $query = db_delete('unl_access_node_affiliation')
+      ->condition('nid' , $nids);
+    if ($affiliation != 'all') {
+      $query->condition('affiliation', $affiliation);
+    }
+
+    if ($query->execute()) {
+      node_access_needs_rebuild(TRUE);
+    }
   }
 }
