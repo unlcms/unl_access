@@ -1,0 +1,10 @@
+langcode: en
+status: true
+dependencies:
+  module:
+    - node
+id: add_faculty_emeriti_affiliation_to_node
+label: "Add 'Faculty/Emeriti Affiliation'"
+type: node
+plugin: add_faculty_emeriti_affiliation_to_node
+configuration: {  }

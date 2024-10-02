@@ -1,0 +1,10 @@
+langcode: en
+status: true
+dependencies:
+  module:
+    - node
+id: remove_staff_affiliation_to_node
+label: "Remove 'Staff Affiliation'"
+type: node
+plugin: remove_staff_affiliation_to_node
+configuration: {  }
