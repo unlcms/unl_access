@@ -16,6 +16,6 @@
   ],
   "require": {
     "drupal/core": "^9 || ^10",
-    "drupal:unl_cas": "^2.0"
+    "drupal/unl_cas": "^2.0"
   }
 }
