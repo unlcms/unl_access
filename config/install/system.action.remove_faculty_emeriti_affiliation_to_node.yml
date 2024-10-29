@@ -1,0 +1,10 @@
+langcode: en
+status: true
+dependencies:
+  module:
+    - node
+id: remove_faculty_emeriti_affiliation_to_node
+label: "Remove 'Faculty/Emeriti Affiliation'"
+type: node
+plugin: remove_faculty_emeriti_affiliation_to_node
+configuration: {  }

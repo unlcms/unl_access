@@ -1,0 +1,10 @@
+langcode: en
+status: true
+dependencies:
+  module:
+    - node
+id: add_guest_affiliation_to_node
+label: "Add 'Guest Affiliation'"
+type: node
+plugin: add_guest_affiliation_to_node
+configuration: {  }

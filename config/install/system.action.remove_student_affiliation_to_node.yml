@@ -1,0 +1,10 @@
+langcode: en
+status: true
+dependencies:
+  module:
+    - node
+id: remove_student_affiliation_to_node
+label: "Remove 'Student Affiliation'"
+type: node
+plugin: remove_student_affiliation_to_node
+configuration: {}

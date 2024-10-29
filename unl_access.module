@@ -1,5 +1,9 @@
 <?php
 
+use Drupal\Core\Url;
+use Drupal\group\Entity\GroupRelationship;
+use Drupal\node\Entity\Node;
+
 // Create numeric ids for each affiliation to use as gids in node_access table
 define('UNL_AFFILIATION_ANY',     1);
 define('UNL_AFFILIATION_GUEST',   2);
@@ -49,55 +53,64 @@ function _unl_access_get_affiliations() {
  * Implements hook_access_node_grants.
  * Create a grant for each affiliation the user has.
  */
-function unl_access_node_grants($account, $op) {
-  $grants = array();
-
-  $grants['unl access owner'][] = $account->uid;
-
-  if (!isset($account->data['unl']['affiliations']) || !$account->data['unl']['affiliations']) {
+function unl_access_node_grants(\Drupal\Core\Session\AccountInterface $account, $op) {
+  $grants = [];
+  // Always give the creator of the content owner grant access
+  $grants['unl access owner'][] = $account->getAccount()->id();
+  $affiliations = \Drupal::service('user.data')->get('unl_user', \Drupal::currentUser()->id(), 'eduPersonAffiliation');
+  if (!$affiliations) {
     return $grants;
   }
-
   $grants['unl access affiliation'][] = UNL_AFFILIATION_ANY;
-  foreach ($account->data['unl']['affiliations'] as $affiliation) {
+  foreach ($affiliations as $affiliation) {
     $grants['unl access affiliation'][] = _unl_access_get_grant_id_from_affiliation($affiliation);
   }
-
   return $grants;
 }
 
 /**
  * Implements hook_node_access_records.
+ * Provides node access control records for a specific node.
  * If a node has access limited to some affiliations, put those grants into node_access table
  * along with a grant for the node owner.
  */
 function unl_access_node_access_records($node) {
-  $grants = array();
-
-  foreach ($node->unl_access['affiliations'] as $affiliation) {
+  $grants = [];
+  $affiliations = _unl_access_get_node_affiliations($node->id());
+  foreach ($affiliations as $affiliation) {
     if (!$affiliation) {
       continue;
     }
     $grants[] = array(
       'realm' => 'unl access affiliation',
-      'gid'   => $affiliation,
+      'gid'   => $affiliation->affiliation,
       'grant_view'   => 1,
       'grant_update' => 0,
       'grant_delete' => 0,
       'priority'     => 0,
     );
   }
-
+  $node_creator_id =  $node->getOwnerId();
   // If we're restricting access to this node, give the owner full access.
   if ($grants) {
     $grants[] = array(
       'realm' => 'unl access owner',
-      'gid'   => $node->uid,
+      'gid'   =>  $node_creator_id,
       'grant_view'   => 1,
       'grant_update' => 1,
       'grant_delete' => 1,
       'priority'     => 0,
     );
+  }
+  // If we aren't assigning any grants to the node, assign drupal's public grant.
+  if (empty($grants)) {
+    $grants[] = [
+      'realm' => 'all',
+      'gid' => 0,
+      'grant_view' => 1,
+      'grant_update' => 0,
+      'grant_delete' => 0,
+    ];
   }
 
   return $grants;
@@ -105,44 +118,100 @@ function unl_access_node_access_records($node) {
 
 /**
  * Implements hook_form_alter.
- * Add a section to the node edit form to allow users to limit viewing of the node to certain UNL affiliations.
+ * Add a section to the node edit form that allows users to restrict the viewing of the node to specific UNL affiliations..
  */
-function unl_access_form_alter(&$form, &$form_state, $form_id) {
-  if (isset($form['type']['#value']) && $form['type']['#value'] . '_node_form' == $form_id) {
-    $form['unl_access'] = array(
-      '#type' => 'fieldset',
-      '#title' => 'UNL Access',
-      '#group' => 'additional_settings',
-    );
-    $form['unl_access']['affiliations'] = array(
-      '#type' => 'checkboxes',
-      '#multiple' => TRUE,
-      '#title' => 'Affiliations',
-      '#description' => 'Restrict viewing of this node to these UNL affiliations (select none for public access).',
-      '#options' => _unl_access_get_affiliations(),
-      '#default_value' => isset($form_state['node']->unl_access) ? $form_state['node']->unl_access['affiliations'] : array(),
-      '#attached' => array(
-        'js' => array(drupal_get_path('module', 'unl_access') . '/node.js')
-      ),
-      '#parents' => array('unl_access', 'affiliations'),
-    );
+function unl_access_form_alter(&$form, \Drupal\Core\Form\FormStateInterface $form_state, $form_id) {
+  if ($form_id == 'views_form_content_page_1') {
+    $options = $form['header']['node_bulk_form']['action']['#options'];
+    $actions_to_check = [
+      'make_node_public',
+      'add_any_affiliation_to_node',
+      'add_faculty_emeriti_affiliation_to_node',
+      'add_guest_affiliation_to_node',
+      'add_staff_affiliation_to_node',
+      'add_student_affiliation_to_node',
+      'remove_any_affiliation_to_node',
+      'remove_faculty_emeriti_affiliation_to_node',
+      'remove_guest_affiliation_to_node',
+      'remove_staff_affiliation_to_node',
+      'remove_student_affiliation_to_node',
+    ];
+    // Loop through each action to reorder and place affiliation actions under 'Manage Affiliation'.
+    foreach ($actions_to_check as $action) {
+      if (isset($form['header']['node_bulk_form']['action']['#options'][$action])) {
+        $reordered_options["Manage UNL Affiliations Access"][$action] = $form['header']['node_bulk_form']['action']['#options'][$action];
+        // unset the position of the original action
+        unset($options[$action]);
+      }
+    }
+    // Assign the reorderd options to the header
+    $form['header']['node_bulk_form']['action']['#options'] = $options + $reordered_options;
+  }
+  $content_types = \Drupal\node\Entity\NodeType::loadMultiple();
+  // Loop through content types to check only for node creation and edit forms.
+  foreach ($content_types as $content_type) {
+    $content_type_id = $content_type->id();
+    // Check if form_id matches the pattern 'node_[content_type_name]_edit_form' and 'node_[content_type_name_form'.
+    if (strpos($form_id, 'node_' . $content_type_id . '_edit_form') === 0 || strpos($form_id, 'node_' . $content_type_id . '_form') === 0) {
+      $node = $form_state->getFormObject()->getEntity();
+      $affiliation_options = _unl_access_get_node_affiliations($node->id());
+
+      foreach ($affiliation_options as $affilaition_key => $affiliation_data) {
+        $affiliation_checkbox_options[] = $affiliation_data->affiliation;
+      }
+      $form['unl_access'] = array(
+        '#type' => 'details',
+        '#title' => 'UNL Access',
+        '#group' => 'advanced',
+        '#weight' => 30,
+      );
+      $form['unl_access']['affiliations'] = array(
+        '#type' => 'checkboxes',
+        '#multiple' => TRUE,
+        '#title' => 'Affiliations',
+        '#description' => 'Restrict Viewing of This Node to Specific UNL Affiliations (Select no affiliations for public view) This will also affect site admins and editors who do not have the selected affiliations.',
+        '#options' => _unl_access_get_affiliations(),
+        '#default_value' => $affiliation_checkbox_options,
+        '#parents' => array('unl_access', 'affiliations'),
+      );
+      $form['unl_access']['affiliations']['#attached']['library'][] = 'unl_access/unl_access';
+      $form['actions']['submit']['#submit'][] = '_unl_access_node_edit_create_form_save';
+    }
+    if (strpos($form_id, 'node_' . $content_type_id . '_delete_form') === 0) {
+      $form['actions']['delete']['#submit'][] = '_unl_access_node_form_delete';
+    }
   }
 }
 
-/**
- * Implements hook_node_insert.
- * After saving a node, also save which affiliations are allowed to view it.
- */
-function unl_access_node_insert($node) {
-  foreach ($node->unl_access['affiliations'] as $affiliation) {
+function _unl_access_insert_affiliation_data($node_id, $node, $affiliations_data = []) {
+  foreach ($affiliations_data as $affiliation) {
     if (!$affiliation) {
       continue;
     }
-    db_insert('unl_access_node_affiliation')
+    \Drupal::database()->insert('unl_access_node_affiliation')
       ->fields(array('nid', 'affiliation'))
-      ->values(array($node->nid, $affiliation))
+      ->values(array($node_id, $affiliation))
       ->execute();
   }
+  // Process the access records for the specific node being saved.
+  $access_records = unl_access_node_access_records($node);
+  // Use the node grant storage service to write the grants.
+  \Drupal::service('node.grant_storage')->write($node, $access_records);
+}
+
+function _unl_access_node_edit_create_form_save($form, &$form_state) {
+  $node = $form_state->getFormObject()->getEntity();
+  $affiliations_data = $form_state->getValue('unl_access')['affiliations'];
+  unl_access_node_delete($node);
+  _unl_access_insert_affiliation_data($node->id(), $node, $affiliations_data);
+}
+
+function _unl_access_node_form_delete($form, &$form_state) {
+  $node = $form_state->getFormObject()->getEntity();
+  unl_access_node_delete($node);
+  // Process the access records for the specific node being saved.
+  $access_records = unl_access_node_access_records($node);
+  \Drupal::service('node.grant_storage')->write($node, $access_records);
 }
 
 /**
@@ -150,77 +219,63 @@ function unl_access_node_insert($node) {
  * When removing a node, remove all affiliation access data.
  */
 function unl_access_node_delete($node) {
-  db_delete('unl_access_node_affiliation')
-    ->condition('nid', $node->nid)
+  \Drupal::database()->delete('unl_access_node_affiliation')
+    ->condition('nid', $node->id())
     ->execute();
 }
 
-/**
- * Implements hook_node_update.
- * When updating a node, also update affiliation access data.
- */
-function unl_access_node_update($node) {
-  unl_access_node_delete($node);
-  unl_access_node_insert($node);
-}
-
-/**
- * Implements hook_node_load.
- * When loading a node, append any affiliation access data.
- */
-function unl_access_node_load($nodes, $types) {
-  $nodeIds = array_keys($nodes);
-  $data = db_select('unl_access_node_affiliation', 'a')
-    ->fields('a', array('nid', 'affiliation'))
-    ->condition('nid', $nodeIds)
+function _unl_access_get_node_affiliations($nodeIds) {
+  $affiliations = \Drupal::database()->select('unl_access_node_affiliation', 'a')
+    ->fields('a', ['affiliation']) // Only select the 'affiliation' field
+    ->condition('nid', $nodeIds, 'IN') // Apply the condition to filter by 'nid'
     ->execute()
     ->fetchAll();
-
-  foreach ($data as $row) {
-    $nodes[$row->nid]->unl_access['affiliations'][$row->affiliation] = $row->affiliation;
-  }
+  return $affiliations;
 }
 
 /**
- * Implements hook_page_alter.
+ * Implements hook_preprocess_page.
  * Intercepts 404 pages and makes the message for friendly if the user isn't currently
  * a member of one of the required affiliations.
  */
-function unl_access_page_alter(&$page) {
-  // We only care about 403 pages.
-  if (drupal_get_http_header('Status') != '403 Forbidden') {
+function unl_access_preprocess_page(&$variables) {
+  // We only care about system.403 pages.
+  if (\Drupal::service('current_route_match')->getRouteName() != 'system.403') {
     return;
   }
 
-  // We only care about individual node pages.
-  if (substr(current_path(), 0, 5) != 'node/') {
+  // Check if the page is a node
+  $current_path = \Drupal::service('path.current')->getPath();
+  $url = Url::fromUserInput($current_path);
+  $route_parameters = $url->getRouteParameters();
+  if (!isset($route_parameters['node'])) {
     return;
   }
 
-  // We only care if we're the one limiting access to this page.
-  $nid = substr(current_path(), 5);
-  $data = db_select('unl_access_node_affiliation', 'a')
-    ->fields('a', array('affiliation'))
-    ->condition('nid', $nid)
-    ->execute()
-    ->fetchAll();
-
-  if (!$data) {
+  $nid = $route_parameters['node'];
+  if ($nid) {
+    $node_access_affiliations = \Drupal::database()->select('unl_access_node_affiliation', 'a')
+      ->fields('a', ['affiliation'])
+      ->condition('nid', $nid)
+      ->execute()
+      ->fetchAll();
+  }
+  if (!$node_access_affiliations) {
     return;
   }
-
-  // Generate the friendly error message and display it.
+  // Generate and display a user-friendly message explaining why access is denied.
   $affiliations = array();
-  foreach ($data as $row) {
+  foreach ($node_access_affiliations as $row) {
     switch ($row->affiliation) {
       case UNL_AFFILIATION_ANY:
-        $page['content']['system_main']['main']['#markup'] = 'You must be logged in to a UNL account to view this page.';
+        $variables['page']['content'] = ['#markup' =>
+        '<p>You must be logged in to a UNL account to view this page.'];
         return;
       case UNL_AFFILIATION_GUEST:
-        $affiliations[] = 'Guest' . (user_is_anonymous() ? '' : 's');
+        $affiliations[] = 'Guest' . (\Drupal::currentUser()->isAnonymous() ? '' : 's');
         break;
       case UNL_AFFILIATION_STUDENT:
-        $affiliations[] = 'Student' . (user_is_anonymous() ? '' : 's');
+        $affiliations[] = 'Student' . (\Drupal::currentUser()->isAnonymous() ? '' : 's');
         break;
       case UNL_AFFILIATION_STAFF:
         $affiliations[] = 'Staff';
@@ -233,102 +288,98 @@ function unl_access_page_alter(&$page) {
   }
 
   if (count($affiliations) > 1) {
-    $affiliations[count($affiliations)-1] = (user_is_anonymous() ? 'or ' : 'and ') . $affiliations[count($affiliations)-1];
+    $affiliations[count($affiliations) - 1] = (\Drupal::currentUser()->isAnonymous() ? 'or ' : 'and ') . $affiliations[count($affiliations) - 1];
   }
   $affiliations = implode(', ', $affiliations);
-  if (user_is_anonymous()) {
-    $page['content']['system_main']['main']['#markup'] = 'You must be logged in as a UNL ' . $affiliations . ' to view this page.';
+  if (\Drupal::currentUser()->isAnonymous()) {
+    $variables['page']['content'] = ['#markup' =>
+    '<p>You must be logged in as a UNL ' . $affiliations . ' to view this page.</p>'];
   } else {
-    $page['content']['system_main']['main']['#markup'] = 'Only UNL ' . $affiliations . ' are allowed to view this page.';
+    $variables['page']['content'] = ['#markup' =>
+    '<p>Only UNL ' . $affiliations . ' are allowed to view this page.</p>'];
+  }
+}
+
+
+/**
+ * Implements hook_node_access().
+ *
+ * This function overrides the Group module's access check for nodes. Using node_grants isn't working for group pages.
+ */
+function unl_access_node_access($node, $op, \Drupal\Core\Session\AccountInterface $account) {
+  if ($op === 'view' || $op === 'update' || $op === 'delete' || $op === 'view all revisions') {
+    // Check if the node is part of a group.
+    if (\Drupal::service('module_handler')->moduleExists('group_content_menu')) {
+      $group = _unl_access_get_current_group();
+      if ($group) {
+        $node_id = $node->id();
+        $node_creator_id = $node->getOwnerId();
+        $current_user_id = $account->id();
+        $node_affiliations = _unl_access_get_node_affiliations($node_id);
+        if ($node_affiliations) {
+          // If group node has affiliations associated with it, check if account is anonymous to restrict access
+          if ($account->isAnonymous()) {
+            return \Drupal\Core\Access\AccessResult::forbidden();
+          } else {
+            $user_account_affiliations = \Drupal::service('user.data')->get('unl_user', \Drupal::currentUser()->id(), 'eduPersonAffiliation');
+            // Check if the logged-in user has the necessary privileges to view the group node and grant access if applicable.
+            foreach ($user_account_affiliations as $user_account_affiliation) {
+              foreach ($node_affiliations as $node_affiliation) {
+                if ($node_affiliation->affiliation == _unl_access_get_grant_id_from_affiliation($user_account_affiliation)) {
+                  // return \Drupal\Core\Access\AccessResult::allowed();
+                  return \Drupal\Core\Access\AccessResult::neutral();
+                }
+                // If the logged-in user has any UNL affiliation and the node has the UNL_AFFILIATION_ACCESS grant, grant access.
+                if ($node_affiliation->affiliation == UNL_AFFILIATION_ANY) {
+                  // return \Drupal\Core\Access\AccessResult::allowed();
+                  return \Drupal\Core\Access\AccessResult::neutral();
+                }
+              }
+            }
+            // If the logged-in user is the owner/creator of the node, grant access.
+            if ($node_creator_id === $current_user_id) {
+              return \Drupal\Core\Access\AccessResult::neutral();
+            }
+            // Otherwise, deny access
+            return \Drupal\Core\Access\AccessResult::forbidden();
+          }
+        } else {
+          // If the group node doesn't have any affiliations associated with it,
+          // fallback to the original group access conditions by returning a neutral access result.
+          return \Drupal\Core\Access\AccessResult::neutral();
+        }
+      }
+    }
   }
 }
 
 /**
- * Implements hook_node_operations.
- * Adds a number of operations to mass add/remove affiliation access controls.
+ * Get the current Group.
+ *
+ * @return Drupal\group\Entity\Group
  */
-function unl_access_node_operations() {
-  $ops = array();
-  $ops['unl access'] = array(
-    'label' => 'Manage UNL Affiliation Access',
-  );
-  $ops['unl access make public'] = array(
-    'label' => 'Make public',
-    'callback' => 'unl_access_operation',
-    'callback arguments' => array('mode' => 'revoke', 'affiliation' => 'all')
-  );
-  foreach (array('grant' => 'Add', 'revoke' => 'Remove') as $mode => $modeLabel) {
-    foreach (_unl_access_get_affiliations() as $affiliation => $affiliationLabel) {
-      $ops["unl access $mode-$affiliation"] = array(
-        'label' => "$modeLabel \"$affiliationLabel\"",
-        'callback' => 'unl_access_operation',
-        'callback arguments' => array('mode' => $mode, 'affiliation' => $affiliation)
-      );
-    }
-  }
-  return $ops;
-}
-
-/**
- * Implements hook_form_FORM_ID_alter
- * Shamelessly ripped off from workbench_access to prettify up the node operation menu.
- */
-function unl_access_form_node_admin_content_alter(&$form, &$form_state) {
-  if (empty($form['admin']['options']['operation']['#options'])) {
-    return;
+function _unl_access_get_current_group() {
+  $moduleHandler = \Drupal::service('module_handler');
+  if (!$moduleHandler->moduleExists('group')) {
+    return NULL;
   }
 
-  $options = &$form['admin']['options']['operation']['#options'];
-  foreach ($form['admin']['options']['operation']['#options'] as $key => $value) {
-    if ($key == 'unl access') {
-      unset($options[$key]);
-      $item = t('Manage UNL Affiliation Access');
-      $options[$item] = array();
+  // If we're on a Group entity page.
+  $group_route_context = \Drupal::service('group.group_route_context');
+  $contexts = $group_route_context->getRuntimeContexts(['group']);
+  $group = $contexts['group']->getContextValue();
+
+  // If we're on a Node entity page.
+  $node = \Drupal::request()->attributes->get('node');
+  if ($node) {
+    if (is_numeric($node)) {
+      $node = Node::load($node);
     }
-    if (substr($key, 0, 11) == 'unl access ') {
-      unset($options[$key]);
-      $options[$item][$key] = $value;
-    }
-  }
-}
-
-/**
- * Callback specified in unl_access_node_operations
- * Handles granting/revoking affiliations for the given list of nodes.
- */
-function unl_access_operation($nids, $mode, $affiliation) {
-  if ($mode == 'grant') {
-    $existing = db_select('unl_access_node_affiliation', 'a')
-      ->fields('a', array('nid'))
-      ->condition('nid', $nids)
-      ->condition('affiliation', $affiliation)
-      ->execute()
-      ->fetchCol();
-    $nids = array_diff($nids, $existing);
-
-    if (!$nids) {
-      return;
-    }
-
-    $query = db_insert('unl_access_node_affiliation')
-      ->fields(array('nid', 'affiliation'));
-    foreach ($nids as $nid) {
-      $query->values(array($nid, $affiliation));
-    }
-
-    $query->execute();
-    node_access_needs_rebuild(TRUE);
-  }
-
-  if ($mode == 'revoke') {
-    $query = db_delete('unl_access_node_affiliation')
-      ->condition('nid' , $nids);
-    if ($affiliation != 'all') {
-      $query->condition('affiliation', $affiliation);
-    }
-
-    if ($query->execute()) {
-      node_access_needs_rebuild(TRUE);
+    $group_content_array = GroupRelationship::loadByEntity($node);
+    foreach ($group_content_array as $group_content) {
+      $group = $group_content->getGroup();
     }
   }
+
+  return $group;
 }
