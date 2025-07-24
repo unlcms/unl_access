@@ -56,15 +56,17 @@ function _unl_access_get_affiliations() {
 function unl_access_node_grants(\Drupal\Core\Session\AccountInterface $account, $op) {
   $grants = [];
   // Always give the creator of the content owner grant access
-  $grants['unl access owner'][] = $account->getAccount()->id();
-  $affiliations = \Drupal::service('user.data')->get('unl_user', \Drupal::currentUser()->id(), 'eduPersonAffiliation');
-  if (!$affiliations) {
-    return $grants;
+  if($account->getAccount()->id() !== 0) {
+    $grants['unl access owner'][] = $account->getAccount()->id();
+    }
+    $affiliations = \Drupal::service('user.data')->get('unl_user', \Drupal::currentUser()->id(), 'eduPersonAffiliation');
+  if ($affiliations) {
+    $grants['unl access affiliation'][] = UNL_AFFILIATION_ANY;
+    foreach ($affiliations as $affiliation) {
+      $grants['unl access affiliation'][] = _unl_access_get_grant_id_from_affiliation($affiliation);
+    }
   }
-  $grants['unl access affiliation'][] = UNL_AFFILIATION_ANY;
-  foreach ($affiliations as $affiliation) {
-    $grants['unl access affiliation'][] = _unl_access_get_grant_id_from_affiliation($affiliation);
-  }
+
   return $grants;
 }
 
@@ -103,7 +105,7 @@ function unl_access_node_access_records($node) {
     );
   }
   // If we aren't assigning any grants to the node, assign drupal's public grant.
-  if (empty($grants)) {
+  if (empty($grants) && $node->isPublished()) {
     $grants[] = [
       'realm' => 'all',
       'gid' => 0,
@@ -326,12 +328,10 @@ function unl_access_node_access($node, $op, \Drupal\Core\Session\AccountInterfac
             foreach ($user_account_affiliations as $user_account_affiliation) {
               foreach ($node_affiliations as $node_affiliation) {
                 if ($node_affiliation->affiliation == _unl_access_get_grant_id_from_affiliation($user_account_affiliation)) {
-                  // return \Drupal\Core\Access\AccessResult::allowed();
                   return \Drupal\Core\Access\AccessResult::neutral();
                 }
                 // If the logged-in user has any UNL affiliation and the node has the UNL_AFFILIATION_ACCESS grant, grant access.
                 if ($node_affiliation->affiliation == UNL_AFFILIATION_ANY) {
-                  // return \Drupal\Core\Access\AccessResult::allowed();
                   return \Drupal\Core\Access\AccessResult::neutral();
                 }
               }
