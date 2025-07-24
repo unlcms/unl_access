@@ -1,0 +1,4 @@
+bypass unl access grant:
+  title: 'Bypass a UNL Access view restriction'
+  description: 'Allows users to bypass the node access grant entirely.'
+  restrict access: true

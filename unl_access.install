@@ -1,6 +1,14 @@
 <?php
 
 /**
+ * Implements hook_install().
+ */
+function unl_access_install() {
+  // Rebuild node access permissions.
+  \Drupal::service('node.access')->rebuild();
+}
+
+/**
  * Implements hook_schema().
  */
 function unl_access_schema() {
