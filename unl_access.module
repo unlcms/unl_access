@@ -179,7 +179,9 @@ function unl_access_form_alter(&$form, \Drupal\Core\Form\FormStateInterface $for
         '#type' => 'checkboxes',
         '#multiple' => TRUE,
         '#title' => 'Affiliations',
-        '#description' => 'Restrict Viewing of This Node to Specific UNL Affiliations (Select no affiliations for public view) This will also affect site admins and editors who do not have the selected affiliations.',
+        '#description' => 'Restrict viewing to logged in users with specified UNL Affiliations. 
+          Leave blank for general public availability. 
+          (Note: files uploaded to this site and linked on the page will still be publicly accessible without a login if the URL is known.)',
         '#options' => _unl_access_get_affiliations(),
         '#default_value' => $affiliation_default,
         '#parents' => array('unl_access', 'affiliations'),
@@ -312,55 +314,50 @@ function unl_access_preprocess_page(&$variables) {
  * Implements hook_node_access().
  */
 function unl_access_node_access($node, $op, AccountInterface $account) {
+  if (!in_array($op, ['view', 'update', 'delete', 'view all revisions'])) {
+    return AccessResult::neutral();
+  }
+
   // Bypass the node access grant system if user has permission.
-  if ($op === 'view' && $account->hasPermission('bypass unl access grant')) {
+  if ($account->hasPermission('bypass unl access grant')) {
     return AccessResult::allowed();
   }
 
   // Overrides the Group module's access check for nodes.
   // Using node_grants isn't working for group pages.
-  if ($op === 'view' || $op === 'update' || $op === 'delete' || $op === 'view all revisions') {
-    // Check if the node is part of a group.
-    if (\Drupal::service('module_handler')->moduleExists('group_content_menu')) {
-      $group = _unl_access_get_current_group();
-      if ($group) {
-        $node_id = $node->id();
-        $node_creator_id = $node->getOwnerId();
-        $current_user_id = $account->id();
-        $node_affiliations = _unl_access_get_node_affiliations($node_id);
-        if ($node_affiliations) {
-          // If group node has affiliations associated with it, check if account is anonymous to restrict access.
-          if ($account->isAnonymous()) {
-            return AccessResult::forbidden();
-          }
-          else {
-            $user_account_affiliations = \Drupal::service('user.data')->get('unl_user', \Drupal::currentUser()->id(), 'eduPersonAffiliation');
-            // Check if the logged-in user has the necessary privileges to view the group node and grant access if applicable.
-            foreach ($user_account_affiliations as $user_account_affiliation) {
-              foreach ($node_affiliations as $node_affiliation) {
-                if ($node_affiliation->affiliation == _unl_access_get_grant_id_from_affiliation($user_account_affiliation)) {
-                  return AccessResult::neutral();
-                }
-                // If the logged-in user has any UNL affiliation and the node has the UNL_AFFILIATION_ACCESS grant, grant access.
-                if ($node_affiliation->affiliation == UNL_AFFILIATION_ANY) {
-                  return AccessResult::neutral();
-                }
-              }
-            }
-            // If the logged-in user is the owner/creator of the node, grant access.
-            if ($node_creator_id === $current_user_id) {
+  if (\Drupal::service('module_handler')->moduleExists('group_content_menu') && _unl_access_get_current_group()) {
+    $node_affiliations = _unl_access_get_node_affiliations($node->id());
+    if ($node_affiliations) {
+      // If group node has affiliations associated with it, check if account is anonymous to restrict access.
+      if ($account->isAnonymous()) {
+        return AccessResult::forbidden();
+      }
+      else {
+        $user_account_affiliations = \Drupal::service('user.data')->get('unl_user', \Drupal::currentUser()->id(), 'eduPersonAffiliation');
+        // Check if the logged-in user has the necessary privileges to view the group node and grant access if applicable.
+        foreach ($user_account_affiliations as $user_account_affiliation) {
+          foreach ($node_affiliations as $node_affiliation) {
+            if ($node_affiliation->affiliation == _unl_access_get_grant_id_from_affiliation($user_account_affiliation)) {
               return AccessResult::neutral();
             }
-            // Otherwise, deny access.
-            return AccessResult::forbidden();
+            // If the logged-in user has any UNL affiliation and the node has the UNL_AFFILIATION_ACCESS grant, grant access.
+            if ($node_affiliation->affiliation == UNL_AFFILIATION_ANY) {
+              return AccessResult::neutral();
+            }
           }
         }
-        else {
-          // If the group node doesn't have any affiliations associated with it,
-          // fallback to the original group access conditions by returning a neutral access result.
+        // If the logged-in user is the owner/creator of the node, grant access.
+        if ($node->getOwnerId() === $account->id()) {
           return AccessResult::neutral();
         }
+        // Otherwise, deny access.
+        return AccessResult::forbidden();
       }
+    }
+    else {
+      // If the group node doesn't have any affiliations associated with it,
+      // fallback to the original group access conditions by returning a neutral access result.
+      return AccessResult::neutral();
     }
   }
 
