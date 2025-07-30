@@ -4,8 +4,8 @@
  * Implements hook_install().
  */
 function unl_access_install() {
-  // Rebuild node access permissions.
-  \Drupal::service('node.access')->rebuild();
+  // Rebuild node access permissions in batch mode.
+  node_access_rebuild(TRUE);
 }
 
 /**
