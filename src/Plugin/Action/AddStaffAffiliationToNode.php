@@ -42,8 +42,7 @@ class AddStaffAffiliationToNode extends ActionBase {
             ->values(array($node_id, UNL_AFFILIATION_STAFF))
             ->execute();
           if ($inserted_id || $inserted_id == 0) {
-            $access_records = unl_access_node_access_records($entity);
-            \Drupal::service('node.grant_storage')->write($entity, $access_records);
+            $entity->save();
 
             \Drupal::messenger()->addStatus(t('@affiliation_type access has been added to page "@title".', [
               '@title' => $node_title,

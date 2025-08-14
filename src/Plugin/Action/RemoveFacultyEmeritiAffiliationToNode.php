@@ -34,8 +34,7 @@ class RemoveFacultyEmeritiAffiliationToNode extends ActionBase {
           ->condition('affiliation', UNL_AFFILIATION_FACULTY) // Additional condition for status.
           ->execute();
         if ($deleted_count > 0) {
-          $access_records = unl_access_node_access_records($entity);
-          \Drupal::service('node.grant_storage')->write($entity, $access_records);
+          $entity->save();
 
           \Drupal::messenger()->addStatus(t('@affiliation_type access has been removed from page "@title".', [
             '@title' => $node_title,
