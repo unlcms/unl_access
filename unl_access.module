@@ -82,6 +82,19 @@ function unl_access_node_grants(AccountInterface $account, $op) {
  * node_access table along with a grant for the node owner.
  */
 function unl_access_node_access_records($node) {
+  // Use the default revision when checking published status for view access.
+  // Otherwise, a node saved in Draft state will fail the isPublished() check
+  // and an anonymous viewer will lose access to the published revision.
+  if (!$node->isDefaultRevision()) {
+    $default_revision = \Drupal::entityTypeManager()
+        ->getStorage('node')
+        ->loadRevision($node->id());
+
+    if ($default_revision) {
+      $node = $default_revision;
+    }
+  }
+
   $grants = [];
   $affiliations = _unl_access_get_node_affiliations($node->id());
   foreach ($affiliations as $affiliation) {
@@ -97,7 +110,9 @@ function unl_access_node_access_records($node) {
       'priority'     => 0,
     );
   }
+
   $node_creator_id = $node->getOwnerId();
+
   // If restricting access to this node, give the owner full access.
   if ($grants) {
     $grants[] = array(
@@ -110,7 +125,7 @@ function unl_access_node_access_records($node) {
     );
   }
   // If assigning no grants to the node, assign Drupal's public grant.
-  if (empty($grants) && $node->isPublished()) {
+  elseif ($node->isPublished()) {
     $grants[] = [
       'realm' => 'all',
       'gid' => 0,
