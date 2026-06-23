@@ -88,7 +88,7 @@ function unl_access_node_access_records($node) {
   if (!$node->isDefaultRevision()) {
     $default_revision = \Drupal::entityTypeManager()
         ->getStorage('node')
-        ->loadRevision($node->id());
+        ->load($node->id());
 
     if ($default_revision) {
       $node = $default_revision;
